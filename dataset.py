@@ -102,12 +102,12 @@ class Processor():
             result[1].append(HTPA32x32d.tools.resample_timestamps(ts_tuple, step=step))
         return result
 
-class Data():
-    def __init__(self, arrays, timestamps):
-        ''' #TODO '''
+
+
 if __name__ == "__main__":
     dataset = Dataloader_RAM(ids = [121, 122, 123])
-    Processor = Processor()
-    data_tuple = dataset.load()
-    data = Processor.align_timestamps(data) # align frames ()
-    data = Processor.retime(data, step = 3)
+    processor = Processor()
+    data = dataset.load()
+    data = processor.align_timestamps(data) # align frames ()
+    data = processor.retime(data, step = 3)
+    
