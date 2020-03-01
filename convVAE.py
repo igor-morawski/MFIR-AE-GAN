@@ -7,17 +7,12 @@ import glob
 import matplotlib.pyplot as plt
 import PIL
 import imageio
+import argparse
 
 import dataset as dt
-
 INPUT_SHAPE = (32, 32, 1)
-EPOCHS = 500
-LATENT_DIM = 50
-NUM_EXAMPLES_TO_GENERATE = 16
 
-OUTPUT_DIR = "output"
-TMP_DIR = "tmp"
-
+tf.random.set_seed(1234)
 
 class ConvVAE(tf.keras.Model):
     def __init__(self, latent_dim):
@@ -111,7 +106,7 @@ def compute_apply_gradients(model, x, optimizer):
     optimizer.apply_gradients(
         zip(gradients, model.trainable_variables))
 
-def generate_and_save_images(model, epoch, test_input):
+def generate_and_save_images(model, epoch, test_input, directory):
   predictions = model.sample(test_input)
   fig = plt.figure(figsize=(4,4))
 
@@ -121,15 +116,63 @@ def generate_and_save_images(model, epoch, test_input):
       plt.axis('off')
 
   # tight_layout minimizes the overlap between 2 sub-plots
-  plt.savefig(os.path.join(TMP_DIR, 'image_at_epoch_{:04d}.png'.format(epoch)))
+  plt.savefig(os.path.join(directory, 'image_at_epoch_{:04d}.png'.format(epoch)))
   plt.close(fig)
 
+def plot_ELBO(train_elbo_log, test_elbo_log, model_dir, prefix="", suffix=""):
+    plt.plot(np.array(train_elbo_log))
+    plt.plot(np.array(test_elbo_log))
+    plt.title('model ELBO')
+    plt.ylabel('ELBO')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'validation'], loc='upper left')
+    plt.savefig(os.path.join(model_dir, prefix+"model_ELBO"+suffix+".png"))
+    plt.close()
+    return
+    
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output_dir',
+                        type=str,
+                        default="output",
+                        help='Path to the output folder')
+    parser.add_argument('--tmp_dir',
+                        type=str,
+                        default="tmp",
+                        help='Path to the tmp files folder')
+    parser.add_argument('--epochs',
+                        type=int,
+                        default=250,
+                        help='How many epochs to train.')
+    parser.add_argument('--lr',
+                        type=float,
+                        default=1e-4,
+                        help='Learning rate.')
+    parser.add_argument('--num_examples_to_generate',
+                        type=int,
+                        default=16,
+                        help='How many examples to genereate in visualization gif.')
+    parser.add_argument('--latent_dim',
+                        type=int,
+                        default=50,
+                        help='How many examples to genereate in visualization gif.')
+    parser.add_argument('--prefix',
+                        type=str,
+                        default="",
+                        help='Prefix to identify the files.')
+    parser.add_argument('--suffix',
+                        type=str,
+                        default="",
+                        help='Prefix to identify the files.')
+    FLAGS, unparsed = parser.parse_known_args()
     def make_sure_path_exists(dir):
         if not os.path.exists(dir):
             os.mkdir(dir)
-    make_sure_path_exists(TMP_DIR)
-    make_sure_path_exists(OUTPUT_DIR)
+    make_sure_path_exists(FLAGS.tmp_dir)
+    make_sure_path_exists(FLAGS.output_dir)
+    filenames = glob.glob(os.path.join(FLAGS.tmp_dir,'image*.png'))
+    for filename in filenames:
+        os.remove(filename)
 
     dataset = dt.Dataloader_RAM(ids = [121, 122, 123])
     processor = dt.Processor()
@@ -163,22 +206,24 @@ if __name__ == "__main__":
     train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(TRAIN_BUF).batch(BATCH_SIZE)
     test_dataset = tf.data.Dataset.from_tensor_slices(test_images).shuffle(TEST_BUF).batch(BATCH_SIZE)
 
-    optimizer=tf.keras.optimizers.Adam(1e-4)
+    optimizer=tf.keras.optimizers.Adam(FLAGS.lr)
 
-    epochs=EPOCHS
-    num_examples_to_generate=NUM_EXAMPLES_TO_GENERATE
-    latent_dim = LATENT_DIM
     
     random_vector_for_generation=tf.random.normal(
-        shape=[num_examples_to_generate, latent_dim])
-    model=ConvVAE(latent_dim)
+        shape=[FLAGS.num_examples_to_generate, FLAGS.latent_dim])
+    model=ConvVAE(FLAGS.latent_dim)
     
-    generate_and_save_images(model, 0, random_vector_for_generation)
+    generate_and_save_images(model, 0, random_vector_for_generation, FLAGS.tmp_dir)
 
-    for epoch in range(1, epochs + 1):
+    train_loss_log = []
+    test_loss_log = []
+    for epoch in range(1, FLAGS.epochs + 1):
         start_time = time.time()
+        train_loss = tf.keras.metrics.Mean()
         for train_x in train_dataset:
             compute_apply_gradients(model, train_x, optimizer)
+            train_loss(compute_loss(model, train_x))
+        train_elbo = -train_loss.result()
         end_time = time.time()
 
         if epoch % 1 == 0:
@@ -186,16 +231,20 @@ if __name__ == "__main__":
             for test_x in test_dataset:
                 loss(compute_loss(model, test_x))
             elbo = -loss.result()
-            print('Epoch: {}, Test set ELBO: {}, '
-                'time elapse for current epoch {}'.format(epoch,
+            print('Epoch: {}, Train set ELBO: {}. Test set ELBO: {}, '
+                'time elapse for current epoch {}'.format(epoch, train_elbo,
                                                             elbo,
                                                             end_time - start_time))
             generate_and_save_images(
-                model, epoch, random_vector_for_generation)
+                model, epoch, random_vector_for_generation, FLAGS.tmp_dir)
+            train_loss_log.append(train_elbo)
+            test_loss_log.append(elbo)
+    plot_ELBO(train_loss_log, test_loss_log, FLAGS.output_dir, FLAGS.prefix, FLAGS.suffix)
+            
 
-    anim_file = os.path.join(OUTPUT_DIR, 'cvae.gif')
+    anim_file = os.path.join(FLAGS.output_dir, FLAGS.prefix+'convVAE'+FLAGS.suffix+'.gif')
     with imageio.get_writer(anim_file, mode='I') as writer:
-        filenames = glob.glob(os.path.join(TMP_DIR,'image*.png'))
+        filenames = glob.glob(os.path.join(FLAGS.tmp_dir,'image*.png'))
         filenames = sorted(filenames)
         last = -1
         for i,filename in enumerate(filenames):
