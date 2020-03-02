@@ -12,7 +12,9 @@ import argparse
 import dataset as dt
 INPUT_SHAPE = (32, 32, 1)
 
-tf.random.set_seed(1234)
+tf.random.set_seed(777)
+
+NORM_LIST = ["interframe_minmax", "est_minmax", "zscore"]
 
 class ConvVAE(tf.keras.Model):
     def __init__(self, latent_dim):
@@ -98,6 +100,7 @@ def compute_loss(model, x):
     logqz_x=log_normal_pdf(z, mean, logvar)
     return -tf.reduce_mean(logpx_z + logpz - logqz_x)
 
+
 @tf.function
 def compute_apply_gradients(model, x, optimizer):
     with tf.GradientTape() as tape:
@@ -144,6 +147,10 @@ if __name__ == "__main__":
                         type=int,
                         default=250,
                         help='How many epochs to train.')
+    parser.add_argument('--norm',
+                        type=str,
+                        default="interframe_minmax",
+                        help='Normalization method.')
     parser.add_argument('--lr',
                         type=float,
                         default=1e-4,
@@ -154,7 +161,7 @@ if __name__ == "__main__":
                         help='How many examples to genereate in visualization gif.')
     parser.add_argument('--latent_dim',
                         type=int,
-                        default=50,
+                        default=100,
                         help='How many examples to genereate in visualization gif.')
     parser.add_argument('--prefix',
                         type=str,
@@ -164,6 +171,14 @@ if __name__ == "__main__":
                         type=str,
                         default="",
                         help='Prefix to identify the files.')
+    parser.add_argument('--min',
+                        type=float,
+                        default=None,
+                        help='Estimate of min temp.')
+    parser.add_argument('--max',
+                        type=float,
+                        default=None,
+                        help='Estimate of max temp.')
     FLAGS, unparsed = parser.parse_known_args()
     def make_sure_path_exists(dir):
         if not os.path.exists(dir):
@@ -173,6 +188,9 @@ if __name__ == "__main__":
     filenames = glob.glob(os.path.join(FLAGS.tmp_dir,'image*.png'))
     for filename in filenames:
         os.remove(filename)
+    if FLAGS.norm not in NORM_LIST:
+        raise ValueError
+    
 
     dataset = dt.Dataloader_RAM(ids = [121, 122, 123])
     processor = dt.Processor()
@@ -180,11 +198,14 @@ if __name__ == "__main__":
     data = processor.align_timestamps(data) # align frames ()
     data = processor.retime(data, step = 3)
 
+    ''' 
     train_images = data[0][0][0]
     test_images = data[0][1][0]
+    '''
+    train_images = np.vstack(data[0][0])
+    test_images = np.vstack(data[0][1])
     train_images = train_images.reshape(train_images.shape[0], *INPUT_SHAPE).astype('float32')
     test_images = test_images.reshape(test_images.shape[0], *INPUT_SHAPE).astype('float32')
-
     #normaliation
     def minmax_norm(images, min = None, max = None):
         #interframe normalization, the set is assumed to come from the same recording here!
@@ -193,10 +214,23 @@ if __name__ == "__main__":
         if not max:
             max = images.max()
         return (images-min)/(max-min)
-    
+
+    def zscore(images):
+        return (images - images.mean())/images.std()
+        
     min, max = 20, 40
+
+    NORM_LIST = ["interframe_minmax", "est_minmax", "zscore"]
+
+    def normalize(norm : str, images, min = None, max = None):
+        if norm == "interframe_minmax" or "est_minmax":
+            return minmax_norm(images, min, max)
+        if norm == "zscore":
+            return zscore(images)
+
     train_images = minmax_norm(train_images, min, max)
     test_images = minmax_norm(test_images, min, max)
+
 
     TRAIN_BUF = 60000
     BATCH_SIZE = 100
