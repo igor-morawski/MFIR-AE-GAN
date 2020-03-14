@@ -25,6 +25,7 @@ class ConvVAE(tf.keras.Model):
             tf.keras.layers.InputLayer(input_shape=INPUT_SHAPE),
             tf.keras.layers.Conv2D(
                 filters=32, kernel_size=3, strides=(2, 2), activation='relu'),
+            tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Conv2D(
                 filters=64, kernel_size=3, strides=(2, 2), activation='relu'),
             tf.keras.layers.Flatten(),
@@ -60,7 +61,7 @@ class ConvVAE(tf.keras.Model):
     def sample(self, eps=None):
         if eps is None:
             eps=tf.random.normal(shape=(100, self.latent_dim))
-        return self.decode(eps, apply_sigmoid=True)
+        return self.decode(eps, apply_sigmoid=False)
 
     def encode(self, x):
         mean, logvar=tf.split(self.inference_net(
@@ -109,9 +110,10 @@ def compute_apply_gradients(model, x, optimizer):
     optimizer.apply_gradients(
         zip(gradients, model.trainable_variables))
 
-def generate_and_save_images(model, epoch, test_input, directory):
+def generate_and_save_images(model, epoch, test_input, directory, title):
   predictions = model.sample(test_input)
   fig = plt.figure(figsize=(4,4))
+  plt.suptitle(title)
 
   for i in range(predictions.shape[0]):
       plt.subplot(4, 4, i+1)
@@ -123,8 +125,8 @@ def generate_and_save_images(model, epoch, test_input, directory):
   plt.close(fig)
 
 def plot_ELBO(train_elbo_log, test_elbo_log, model_dir, prefix="", suffix=""):
-    plt.plot(np.array(train_elbo_log))
-    plt.plot(np.array(test_elbo_log))
+    plt.plot(np.array(train_elbo_log), ls='-', color='blue')
+    plt.plot(np.array(test_elbo_log), ls='--', color='blue')
     plt.title('model ELBO')
     plt.ylabel('ELBO')
     plt.xlabel('epoch')
@@ -191,21 +193,20 @@ if __name__ == "__main__":
     if FLAGS.norm not in NORM_LIST:
         raise ValueError
     
-
-    dataset = dt.Dataloader_RAM(ids = [121, 122, 123])
+    directory_path, ids = dt.DATASETS["20200131"]["filepath"], dt.DATASETS["20200131"]["ids"]
+    dataset = dt.Dataloader_RAM(directory_path, ids)
     processor = dt.Processor()
     data = dataset.load()
     data = processor.align_timestamps(data) # align frames ()
     data = processor.retime(data, step = 3)
 
-    ''' 
-    train_images = data[0][0][0]
-    test_images = data[0][1][0]
-    '''
     train_images = np.vstack(data[0][0])
     test_images = np.vstack(data[0][1])
+
     train_images = train_images.reshape(train_images.shape[0], *INPUT_SHAPE).astype('float32')
     test_images = test_images.reshape(test_images.shape[0], *INPUT_SHAPE).astype('float32')
+    
+
     #normaliation
     def minmax_norm(images, min = None, max = None):
         #interframe normalization, the set is assumed to come from the same recording here!
@@ -215,25 +216,34 @@ if __name__ == "__main__":
             max = images.max()
         return (images-min)/(max-min)
 
-    def zscore(images):
-        return (images - images.mean())/images.std()
+    def zscore(images, mean, std):
+        if not mean:
+            mean = images.mean()
+        if not std:
+            std = images.std()
+        return (images - mean)/std
         
-    min, max = 20, 40
 
-    NORM_LIST = ["interframe_minmax", "est_minmax", "zscore"]
-
-    def normalize(norm : str, images, min = None, max = None):
-        if norm == "interframe_minmax" or "est_minmax":
-            return minmax_norm(images, min, max)
+    def normalize_sets(norm : str, train_set, test_set, min = None, max = None):
+        mean = None
+        std = None
+        if (norm == "interframe_minmax") or (norm == "est_minmax"):
+            return minmax_norm(train_set, min, max), minmax_norm(test_set, min, max)
         if norm == "zscore":
-            return zscore(images)
-
-    train_images = minmax_norm(train_images, min, max)
-    test_images = minmax_norm(test_images, min, max)
-
+            if not (mean or std):
+                tmp_stack = np.vstack([train_images, test_images])
+                if not mean:
+                    mean = tmp_stack.mean()
+                if not std:
+                    std = tmp_stack.std()
+            #mean = 0 for the project. 
+            return zscore(train_set, 0, std)/10, zscore(test_set, 0, std)/10
+        return None
+    
+    train_images, test_images = normalize_sets(FLAGS.norm, train_images, test_images, FLAGS.min, FLAGS.max)
 
     TRAIN_BUF = 60000
-    BATCH_SIZE = 100
+    BATCH_SIZE = 2300
 
     TEST_BUF = 10000
 
@@ -247,7 +257,9 @@ if __name__ == "__main__":
         shape=[FLAGS.num_examples_to_generate, FLAGS.latent_dim])
     model=ConvVAE(FLAGS.latent_dim)
     
-    generate_and_save_images(model, 0, random_vector_for_generation, FLAGS.tmp_dir)
+    gasi_title_template = "Normalization: {} \n LR {} LS {} Epoch {}"
+    gasi_title = gasi_title_template.format(FLAGS.norm, str(FLAGS.lr), str(FLAGS.latent_dim), str(0))
+    generate_and_save_images(model, 0, random_vector_for_generation, FLAGS.tmp_dir, title=gasi_title)
 
     train_loss_log = []
     test_loss_log = []
@@ -269,8 +281,11 @@ if __name__ == "__main__":
                 'time elapse for current epoch {}'.format(epoch, train_elbo,
                                                             elbo,
                                                             end_time - start_time))
+            gasi_title = gasi_title_template.format(FLAGS.norm, str(FLAGS.lr), str(FLAGS.latent_dim), str(epoch))
             generate_and_save_images(
-                model, epoch, random_vector_for_generation, FLAGS.tmp_dir)
+                model, epoch, random_vector_for_generation, FLAGS.tmp_dir, title=gasi_title)
+            if (np.any(np.isnan(train_loss_log)) or np.any(np.isnan(test_loss_log))):
+                break
             train_loss_log.append(train_elbo)
             test_loss_log.append(elbo)
     plot_ELBO(train_loss_log, test_loss_log, FLAGS.output_dir, FLAGS.prefix, FLAGS.suffix)

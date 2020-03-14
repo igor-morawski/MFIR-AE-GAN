@@ -1,3 +1,6 @@
+'''
+data[temp/time][sample][view]
+'''
 try:
     import HTPA32x32d.tools
 except ModuleNotFoundError:
@@ -9,9 +12,14 @@ import fnmatch
 import re
 import numpy as np
 
+DATASETS = dict()
+DATASETS['20200304'] = {"filepath": os.path.join("data", "20200304"), "ids": [121, 122]}
+DATASETS['20200131'] = {"filepath": os.path.join("data", "20200131"), "ids": [121, 122, 123]}
+
 class Dataloader_RAM():
     '''
-    
+    data dimensions: [temp/time][sample][view]
+
     Initializes a dataloader to load data into memory all at once. Do not use for large data sizes!
     This is a simplified dataloader for convinience only. Works only for files following the naming pattern:
     "YYYYMMDD_HHMM_ID{}.TXT" % int
@@ -33,7 +41,7 @@ class Dataloader_RAM():
     all at once!
     Do not use for large data sizes!
     '''
-    def __init__(self, ids, directory_path = "data", file_extension = "TXT", prefix_pattern="{}_{}_ID".format("[0-9]"*8, "[0-9]"*4), ID_pattern = "*", suffix=""):
+    def __init__(self, directory_path, ids, file_extension = "TXT", prefix_pattern="{}_{}_ID".format("[0-9]"*8, "[0-9]"*4), ID_pattern = "*", suffix=""):
         self._directory_path = directory_path
         self._pattern = prefix_pattern + ID_pattern + suffix
         self._prefix_pattern= prefix_pattern
@@ -41,7 +49,6 @@ class Dataloader_RAM():
         self._suffix = suffix
         self._file_extension = file_extension
         self.ids = ids
-
         self._update_files()
         
     def load(self):
@@ -105,7 +112,8 @@ class Processor():
 
 
 if __name__ == "__main__":
-    dataset = Dataloader_RAM(ids = [121, 122, 123])
+    directory_path, ids = DATASETS["20200131"]["filepath"], DATASETS["20200131"]["ids"]
+    dataset = Dataloader_RAM(directory_path=directory_path, ids = ids)
     processor = Processor()
     data = dataset.load()
     data = processor.align_timestamps(data) # align frames ()
